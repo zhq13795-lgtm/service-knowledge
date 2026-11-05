@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service Knowledge</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6f9;color:#243348;font-family:system-ui,"Microsoft YaHei",sans-serif}.layout{max-width:1150px;margin:auto;padding:40px 24px}header{margin-bottom:28px}header small{letter-spacing:.16em;color:#5276b9;font-weight:700}h1{font-size:34px;margin:8px 0}p{line-height:1.7}.muted{color:#748198;font-size:14px}.grid{display:grid;grid-template-columns:300px 1fr;gap:22px}.panel{background:white;border:1px solid #e0e6ef;border-radius:14px;padding:24px}h2{font-size:18px;margin:0 0 18px}button{cursor:pointer;border:0;background:#315fa8;color:white;border-radius:8px;padding:11px 18px;font:inherit}button:disabled{opacity:.55;cursor:wait}input[type=file]{width:100%;margin-bottom:14px;font-size:13px}.document{border-top:1px solid #edf0f5;padding:13px 0;overflow-wrap:anywhere}.document b{font-size:14px}.document small{display:block;color:#8b96a7;margin-top:5px}.question{width:100%;resize:vertical;min-height:100px;padding:14px;border:1px solid #d2dbe8;border-radius:9px;font:inherit;line-height:1.6}.toolbar{display:flex;align-items:center;justify-content:space-between;margin-top:12px;gap:10px}.examples{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}.examples button{font-size:12px;color:#526987;background:#eef3fa;padding:8px 10px}.answer{white-space:pre-wrap;line-height:1.9;margin:26px 0}.source{border:1px solid #e0e8f3;background:#f8faff;border-radius:9px;padding:16px;margin-top:12px}.source h3{font-size:14px;margin:0 0 8px}.source p{white-space:pre-wrap;font-size:13px;margin:0}.error{color:#b3413a;font-size:14px;line-height:1.5}.status{min-height:20px;font-size:13px;color:#748198}#sources:empty{display:none}@media(max-width:760px){.grid{grid-template-columns:1fr}.layout{padding:25px 16px}.panel{padding:20px}}
+</style>
+</head>
+<body>
+<main class="layout">
+<header><small>SERVICE KNOWLEDGE</small><h1>客服知识库</h1><p class="muted">导入业务资料，查询相关说明，核对回答出处。</p></header>
+<div class="grid">
+<aside class="panel">
+<h2>知识文档</h2><p class="muted">支持 UTF-8 文本与 Markdown，单个文件不超过 1 MB。</p>
+<form id="upload-form"><input id="file" type="file" accept=".md,.txt" required><button id="upload-button" type="submit">导入文档</button></form>
+<p id="upload-status" class="status" role="status"></p><div id="documents"></div>
+</aside>
+<section class="panel">
+<h2>知识问答</h2>
+<form id="query-form"><textarea id="question" class="question" maxlength="500" placeholder="例如：退货需要提供什么材料？" required></textarea><div class="toolbar"><span class="muted">从已有文档检索并整理相关摘录</span><button id="query-button" type="submit">查询</button></div></form>
+<div class="examples"><button data-question="退货需要提供什么材料？">退货材料</button><button data-question="物流三天没有更新怎么办？">物流异常</button><button data-question="开具企业发票需要什么信息？">企业发票</button></div>
+<p id="query-status" class="status" role="status"></p><div id="answer" class="answer"></div><div id="sources"></div>
+</section>
+</div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+async function request(url, options) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '请求失败，请检查输入。');
+  return data;
+}
+function status(id, message, error = false) {
+  $(id).textContent = message;
+  $(id).className = error ? 'status error' : 'status';
+}
+async function loadDocuments() {
+  const data = await request('/api/documents');
+  $('documents').replaceChildren();
+  for (const doc of data.documents) {
+    const item = document.createElement('div'); item.className = 'document';
+    const title = document.createElement('b'); title.textContent = doc.name;
+    const detail = document.createElement('small'); detail.textContent = `${doc.chunk_count} 个片段 · ${doc.created_at}`;
+    item.append(title, detail); $('documents').append(item);
+  }
+}
+$('upload-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); $('upload-button').disabled = true;
+  status('upload-status', '正在导入…');
+  try {
+    const form = new FormData(); form.append('file', $('file').files[0]);
+    const data = await request('/api/documents', { method: 'POST', body: form });
+    status('upload-status', `已导入 ${data.chunk_count} 个片段`);
+    $('file').value = ''; await loadDocuments();
+  } catch (error) { status('upload-status', error.message, true); }
+  finally { $('upload-button').disabled = false; }
+});
+$('query-form').addEventListener('submit', async (event) => {
+  event.preventDefault(); $('query-button').disabled = true;
+  status('query-status', '正在检索…'); $('answer').textContent = ''; $('sources').replaceChildren();
+  try {
+    const data = await request('/api/query', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({question: $('question').value}) });
+    $('answer').textContent = data.answer;
+    status('query-status', `找到 ${data.sources.length} 个相关片段`);
+    data.sources.forEach((source, index) => {
+      const card = document.createElement('article'); card.className = 'source';
+      const title = document.createElement('h3'); title.textContent = `[${index + 1}] ${source.source} · 片段 ${source.position}`;
+      const content = document.createElement('p'); content.textContent = source.content;
+      card.append(title, content); $('sources').append(card);
+    });
+  } catch (error) { status('query-status', error.message, true); }
+  finally { $('query-button').disabled = false; }
+});
+document.querySelectorAll('[data-question]').forEach((button) => button.addEventListener('click', () => {
+  $('question').value = button.dataset.question; $('query-form').requestSubmit();
+}));
+loadDocuments().catch((error) => status('upload-status', error.message, true));
+</script>
+</body>
+</html>
